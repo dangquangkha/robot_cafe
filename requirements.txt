@@ -1,0 +1,10 @@
+requests
+qrcode
+PyQt5
+pyserial
+pygame
+openai
+python-dotenv
+SpeechRecognition
+PyAudio
+
