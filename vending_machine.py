@@ -24,6 +24,7 @@ from dotenv import load_dotenv
 import speech_recognition as sr
 import threading
 
+import serial.tools.list_ports # <--- THÊM DÒNG NÀY
 # ... (phần còn lại của file)
 # ==========================================
 
@@ -38,14 +39,26 @@ class VendingMachine(QWidget):
         super().__init__()
         self.setWindowTitle('Máy Bán Hàng Tự Động (Robot Nhà Hàng)')
         self.showFullScreen()
-
+        self.HEROKU_APP_URL = "https://khai-flask-todo-app-a81bf71c8cf2.herokuapp.com/" 
+        self.current_order_id = None
         # Khởi tạo serial (giữ nguyên)
-        try:
-            self.serial_port = serial.Serial('COM6', 9600, timeout=1)
-            sleep(2)
-        except serial.SerialException:
-            print('Không thể kết nối với Arduino. Chạy ở chế độ không có serial.')
-            self.serial_port = None
+        # === TỰ ĐỘNG KẾT NỐI SERIAL ===
+        self.serial_port = None
+        detected_port = self.get_arduino_port() # Gọi hàm tìm cổng
+        
+        if detected_port:
+            try:
+                # Kết nối vào cổng vừa tìm được
+                self.serial_port = serial.Serial(detected_port, 9600, timeout=1)
+                sleep(2) # Chờ Arduino khởi động lại sau khi kết nối
+                print(f"Kết nối thành công Arduino trên cổng {detected_port}")
+                self.speak("Đã kết nối với hệ thống phần cứng.")
+            except serial.SerialException as e:
+                print(f"Lỗi kết nối cổng {detected_port}: {e}")
+                self.speak("Lỗi kết nối phần cứng.")
+        else:
+            print("Không tìm thấy cổng COM nào!")
+            self.speak("Cảnh báo: Không tìm thấy mạch điều khiển.")
 
         # === THAY ĐỔI: Khởi tạo stack OpenAI & Pygame ===
         # 1. Tải file .env
@@ -109,6 +122,35 @@ class VendingMachine(QWidget):
         self.loop_stopped_ui_update_required.connect(self.safe_reset_status_label)
         
         self.init_product_screen()
+
+    def get_arduino_port(self):
+        """
+        Hàm quét các cổng COM và trả về cổng có khả năng là Arduino nhất.
+        """
+        ports = serial.tools.list_ports.comports()
+        
+        # Danh sách các từ khóa thường có trong tên Driver của Arduino
+        # CH340 là chip thường dùng trong các mạch Arduino giá rẻ/clone
+        arduino_identifiers = ['Arduino', 'CH340', 'USB Serial', 'USB-SERIAL']
+        
+        print("Đang quét các cổng COM hiện có:")
+        for port in ports:
+            description = port.description
+            device = port.device
+            print(f"- Tìm thấy: {device} ({description})")
+            
+            # Kiểm tra xem mô tả cổng có chứa từ khóa không
+            for identifier in arduino_identifiers:
+                if identifier in description:
+                    print(f"-> Đã chọn cổng: {device} (Khớp từ khóa '{identifier}')")
+                    return device
+                    
+        # Nếu không tìm thấy từ khóa, thử trả về cổng COM đầu tiên tìm thấy (nếu có)
+        if len(ports) > 0:
+            print(f"-> Không nhận ra tên Arduino, nhưng chọn đại cổng đầu tiên: {ports[0].device}")
+            return ports[0].device
+            
+        return None
 
     # === THAY ĐỔI: Hàm speak mới dùng OpenAI + Pygame (từ testv4.py) ===
     def speak(self, text, interrupt_listen=True): # <-- THÊM interrupt_listen
@@ -588,149 +630,142 @@ class VendingMachine(QWidget):
         self.sugar_label.setText(f'{value} gam {self.sugar_type.lower()}')
 
     # Dòng 680 (Sửa lại hàm này)
+    # === SỬA LẠI: Màn hình thanh toán gọi API Server ===
     def init_payment_screen(self):
-        # (Phần dọn dẹp và tiêu đề giữ nguyên)
         self.clear_layout(self.main_layout)
 
-        title = QLabel('THANH TOÁN QUA mã QR')
-        title.setStyleSheet('font-size: 48px; font-weight: bold; color: #FF6200;')
+        title = QLabel('THANH TOÁN QUÉT MÃ QR')
+        title.setStyleSheet('font-size: 40px; font-weight: bold; color: #FF6200;')
         self.main_layout.addWidget(title, alignment=Qt.AlignCenter)
 
-        # === THAY ĐỔI LỚN TẠI ĐÂY: GỌI HÀM TẠO QR ĐỘNG ===
-        qr_image_path = self.generate_vnpay_qr_url() # <-- GỌI HÀM MỚI TẠO
-        
-        qr_label = QLabel()
-        
-        if qr_image_path and os.path.exists(qr_image_path):
-            pixmap = QPixmap(qr_image_path)
-        else:
-            pixmap = QPixmap() # Tạo một QPixmap rỗng
-            
-        if pixmap.isNull():
-            qr_label.setText(f'Không thể tạo ảnh QR! Vui lòng kiểm tra log.')
-            qr_label.setStyleSheet('font-size: 24px; color: red;')
-        else:
-            scaled_pixmap = pixmap.scaled(500, 500, Qt.KeepAspectRatio)
-            qr_label.setPixmap(scaled_pixmap)
-        # === KẾT THÚC THAY ĐỔI LỚN ===
+        # Label hiển thị trạng thái hoặc ảnh QR
+        self.qr_label = QLabel("Đang kết nối máy chủ tạo mã...")
+        self.qr_label.setStyleSheet('font-size: 24px; color: blue;')
+        self.qr_label.setAlignment(Qt.AlignCenter)
+        self.main_layout.addWidget(self.qr_label)
 
-        qr_label.setAlignment(Qt.AlignCenter)
-        self.main_layout.addWidget(qr_label)
-
+        # Thông tin tiền
+        total_money = self.selected_product['price'] * self.quantity
         payment_info = QLabel(
             f"Sản phẩm: {self.selected_product['name']}\n"
-            f"Số tiền: {self.selected_product['price'] * self.quantity:,} VND".replace(',', '.')
+            f"Cần thanh toán: {total_money:,} VND".replace(',', '.')
         )
-        payment_info.setStyleSheet('font-size: 48px; color: #002266;')
+        payment_info.setStyleSheet('font-size: 35px; color: #002266;')
         payment_info.setAlignment(Qt.AlignCenter)
         self.main_layout.addWidget(payment_info)
 
-        # (Phần Timer và self.speak giữ nguyên)
-        self.timer_label = QLabel('Thời gian còn lại: 40 giây')
-        self.timer_label.setStyleSheet('font-size: 48px; color: #002266;')
-        self.timer_label.setAlignment(Qt.AlignCenter)
-        self.main_layout.addWidget(self.timer_label)
+        # Nút hủy (để khách thoát ra nếu không muốn mua nữa)
+        cancel_btn = QPushButton("Hủy bỏ")
+        cancel_btn.setStyleSheet("background-color: red; color: white; font-size: 20px; padding: 10px;")
+        cancel_btn.clicked.connect(self.reset_to_product_screen)
+        self.main_layout.addWidget(cancel_btn, alignment=Qt.AlignCenter)
 
-        self.remaining_time = 40
-        self.payment_timer = QTimer()
-        self.payment_timer.timeout.connect(self.update_payment_timer)
-        self.payment_timer.start(1000)
+        # Gọi hàm tạo giao dịch
+        # Dùng QTimer.singleShot để không làm đơ giao diện ngay lập tức
+        QTimer.singleShot(500, self.create_payment_order)
 
-        # Robot nói hướng dẫn thanh toán
-        self.speak(f"Bạn vui lòng quét mã QR để thanh toán {self.selected_product['price'] * self.quantity:,} đồng.")
-
-        self.update()
-
-    # Dòng 743 (Sửa lại hàm này)
-    def generate_vnpay_qr_url(self):
-        """
-        Tạo mã QR VietQR động và lưu vào một file để hiển thị.
-        """
+    # === THÊM MỚI: Gọi API tạo thanh toán ===
+    def create_payment_order(self):
         try:
-            # 1. CẤU HÌNH TÀI KHOẢN (THAY THẾ BẰNG THÔNG TIN CỦA BẠN)
-            # THAY CÁC GIÁ TRỊ NÀY VÀO ĐỂ TẠO QR CỦA BẠN
-            MY_BANK_ID = "MB"         # Mã ngân hàng (VD: MB, VCB, TECH, ACB,...)
-            MY_ACCOUNT_NO = "0379262302"  # Số tài khoản của bạn
+            total_money = self.selected_product['price'] * self.quantity
+            info = f"Ban{self.order_id}" # Nội dung chuyển khoản
             
-            # Lấy thông tin đơn hàng
-            tong_tien = self.selected_product['price'] * self.quantity
-            noi_dung = f"Thanh toan don hang {self.order_id}"
+            # Gọi API Create Payment
+            url = f"{self.HEROKU_APP_URL}/create-payment?amount={total_money}&info={info}&table=1"
+            print(f"Calling: {url}")
             
-            # 2. TẠO URL GỌI API VIETQR.IO
-            TEMPLATE = "compact"
-            qr_url = (
-                f"https://img.vietqr.io/image/{MY_BANK_ID}-{MY_ACCOUNT_NO}-{TEMPLATE}.png?"
-                f"amount={tong_tien}&"
-                f"addInfo={noi_dung.replace(' ', '%20')}&"
-                f"accountName=CongtyVTG" # Tên gợi ý (Tùy chọn)
-            )
+            response = requests.get(url, timeout=10)
+            data = response.json()
             
-            # 3. GỌI API VÀ LƯU ẢNH VÀO FILE
-            response = requests.get(qr_url, timeout=10)
+            if response.status_code == 200 and 'orderId' in data:
+                self.current_order_id = data['orderId']
+                qr_url = data['payUrl']
+                
+                print(f"Order ID: {self.current_order_id}, QR Link: {qr_url}")
+                
+                # Tải ảnh QR về hiển thị
+                qr_img_resp = requests.get(qr_url, timeout=10)
+                pixmap = QPixmap()
+                pixmap.loadFromData(qr_img_resp.content)
+                
+                self.qr_label.setPixmap(pixmap.scaled(400, 400, Qt.KeepAspectRatio))
+                self.speak("Mời bạn quét mã QR. Hệ thống sẽ tự động pha chế khi nhận được tiền.")
+                
+                # Bắt đầu vòng lặp kiểm tra trạng thái (Polling)
+                self.payment_check_timer = QTimer()
+                self.payment_check_timer.timeout.connect(self.check_payment_status)
+                self.payment_check_timer.start(3000) # Kiểm tra mỗi 3 giây
+                
+            else:
+                self.qr_label.setText("Lỗi tạo mã: " + data.get('error', 'Unknown'))
+                
+        except Exception as e:
+            print(f"Lỗi tạo đơn: {e}")
+            self.qr_label.setText("Lỗi kết nối Server!")
+
+    # === THÊM MỚI: Kiểm tra trạng thái thanh toán (Polling) ===
+    def check_payment_status(self):
+        if not self.current_order_id:
+            return
+
+        try:
+            url = f"{self.HEROKU_APP_URL}/check-status?orderId={self.current_order_id}"
+            response = requests.get(url, timeout=5)
             
             if response.status_code == 200:
-                qr_image_path = r'images/vietqr.png' # SỬ DỤNG TÊN FILE MỚI
+                status = response.json().get('status')
+                print(f"Trạng thái đơn {self.current_order_id}: {status}")
                 
-                # Tạo thư mục images nếu chưa có
-                os.makedirs(os.path.dirname(qr_image_path), exist_ok=True)
-                
-                with open(qr_image_path, 'wb') as f:
-                    f.write(response.content)
-                
-                print(f"Đã tạo QR thành công: {qr_image_path}")
-                return qr_image_path
-            else:
-                print(f"Lỗi khi gọi API VietQR: HTTP {response.status_code}")
-                return None
-                
-        except requests.exceptions.RequestException as e:
-            print(f"Lỗi kết nối khi tạo QR: {e}")
-            return None
+                if status == 'paid':
+                    # === THANH TOÁN THÀNH CÔNG ===
+                    self.payment_check_timer.stop() # Dừng kiểm tra
+                    self.qr_label.setText("THANH TOÁN THÀNH CÔNG!")
+                    self.qr_label.setStyleSheet("color: green; font-size: 30px; font-weight: bold;")
+                    
+                    self.speak("Đã nhận được thanh toán via SePay. Đang tiến hành pha chế.")
+                    
+                    # Chuyển sang màn hình pha chế sau 2 giây
+                    QTimer.singleShot(2000, self.start_brewing)
+                    
+        except Exception as e:
+            print(f"Lỗi check status: {e}")
+            # Không dừng timer, cứ thử lại lần sau
 
-    def update_payment_timer(self):
-        # (Giữ nguyên)
-        self.remaining_time -= 1
-        self.timer_label.setText(f'Thời gian còn lại: {self.remaining_time} giây')
-
-        if self.remaining_time <= 0:
-            # Logic HẾT THỜI GIAN thanh toán (Fail)
-            self.payment_timer.stop()
-            QMessageBox.warning(self, 'Thông báo', 'Thanh toán thất bại, vui lòng thử lại.')
-            self.speak("Đã hết thời gian thanh toán. Mời bạn thực hiện lại.")
-            self.reset_to_product_screen()
-        # elif self.remaining_time == 1:  # Giả lập thanh toán <--- DÒNG NÀY ĐÃ ĐƯỢC XÓA HOẶC COMMENT
-        #     self.payment_timer.stop()
-        #     self.speak("Thanh toán thành công. Mời bạn chờ pha chế.")
-        #     self.start_brewing()
 
     def start_brewing(self):
-        # (Giữ nguyên)
+        # 1. Cập nhật giao diện (Giữ nguyên)
         self.clear_layout(self.main_layout)
 
         title = QLabel('ĐANG PHA CHẾ...')
         title.setStyleSheet('font-size: 30px; font-weight: bold; color: #FF6200;')
         self.main_layout.addWidget(title, alignment=Qt.AlignCenter)
 
-        self.brewing_label = QLabel('Chuẩn bị nguyên liệu...')
+        self.brewing_label = QLabel('Đang gửi lệnh tới Robot...')
         self.brewing_label.setStyleSheet('font-size: 20px; color: #002266;')
         self.main_layout.addWidget(self.brewing_label, alignment=Qt.AlignCenter)
 
+        # Thiết lập các bước hiển thị cho người dùng đỡ chán (Giữ nguyên)
         self.brewing_steps = [
-            'Chuẩn bị nguyên liệu...',
-            'Pha chế đồ uống...',
-            'Hoàn thiện sản phẩm...',
+            'Máy đang chạy...',
+            'Vui lòng đợi giây lát...',
+            'Sắp hoàn thành...',
         ]
         self.brewing_step = 0
         self.brewing_timer = QTimer()
         self.brewing_timer.timeout.connect(self.update_brewing)
-        self.brewing_timer.start(1000)
+        self.brewing_timer.start(2000) # Chạy thanh trạng thái chậm lại chút cho khớp với máy bơm
 
+        # === PHẦN SỬA ĐỔI QUAN TRỌNG TẠI ĐÂY ===
         if self.serial_port:
-            product_id = self.selected_product['id']
-            self.serial_port.write(f"P{product_id}\n".encode())
-            sleep(1)
-            self.serial_port.write(f"S{self.sugar_amount}\n".encode())
-
+            try:
+                print("Thanh toán thành công -> Gửi lệnh kích hoạt (số 1)")
+                # Gửi duy nhất ký tự '1' xuống Arduino
+                self.serial_port.write(b'1') 
+            except Exception as e:
+                print(f"Lỗi khi gửi lệnh xuống Arduino: {e}")
+        else:
+            print("Chưa kết nối Arduino nên không gửi lệnh được.")
+            
         self.update()
 
     def update_brewing(self):
@@ -769,13 +804,17 @@ class VendingMachine(QWidget):
 
     def reset_to_product_screen(self):
         # (Giữ nguyên)
+        # === THÊM: Dừng timer kiểm tra thanh toán nếu đang chạy ===
+        if hasattr(self, 'payment_check_timer') and self.payment_check_timer.isActive():
+            self.payment_check_timer.stop()
         self.selected_product = None
         self.sugar_amount = 10
         self.quantity = 1
         self.order_id = str(int(time()))
         # Reset lại lịch sử chat nhưng giữ lại system prompt
-        system_prompt = self.conversation_history[0]
-        self.conversation_history = [system_prompt]
+        if hasattr(self, 'conversation_history') and self.conversation_history:
+             system_prompt = self.conversation_history[0]
+             self.conversation_history = [system_prompt]
         
         self.stop_conversation_loop()
         self.init_product_screen()
