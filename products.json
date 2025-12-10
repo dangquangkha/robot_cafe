@@ -8,6 +8,14 @@
         "type": "milk"
     },
     {
+        "id": 7,
+        "name": "Cà Phê Đen",
+        "price": 15000,
+        "image": "black_coffee.png",
+        "quantity": 1000,
+        "type": "sugar"
+    },
+    {
         "id": 2,
         "name": "Nước Cam Ép",
         "price": 25000,
@@ -45,14 +53,6 @@
         "price": 30000,
         "image": "avocado_juice.png",
         "quantity": 100,
-        "type": "sugar"
-    },
-    {
-        "id": 7,
-        "name": "Cà Phê Đen",
-        "price": 15000,
-        "image": "black_coffee.png",
-        "quantity": 1000,
         "type": "sugar"
     },
     {

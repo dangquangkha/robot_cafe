@@ -41,16 +41,53 @@ class VendingMachine(QWidget):
         self.showFullScreen()
         self.HEROKU_APP_URL = "https://khai-flask-todo-app-a81bf71c8cf2.herokuapp.com/" 
         self.current_order_id = None
-        # Khởi tạo serial (giữ nguyên)
-        # === TỰ ĐỘNG KẾT NỐI SERIAL ===
+        
+        # === 1. KHỞI TẠO CÁC BIẾN TRẠNG THÁI (QUAN TRỌNG) ===
+        self.is_listening = False
+        self.is_in_conversation_loop = False 
+        self.selected_product = None
+        self.quantity = 1
+        self.sugar_amount = 10
+        self.order_id = str(int(time()))
+
+        # === 2. KHỞI TẠO OPENAI & PYGAME TRƯỚC (ĐƯA LÊN ĐẦU) ===
+        # Tải file .env
+        load_dotenv()
+        
+        # Khởi tạo Client OpenAI
+        try:
+            self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            if not os.getenv("OPENAI_API_KEY"):
+                raise ValueError("OPENAI_API_KEY không tìm thấy trong file .env")
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi API", f"Lỗi: {e}. Hãy chắc chắn bạn đã tạo file .env")
+            sys.exit()
+
+        # Khởi tạo Pygame Mixer
+        try:
+            pygame.mixer.init()
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi Âm thanh", f"Lỗi khởi tạo Pygame: {e}")
+            sys.exit()
+
+        # Khởi tạo bộ nhận diện giọng nói
+        self.recognizer = sr.Recognizer()
+        self.microphone = sr.Microphone()
+        self.text_recognized.connect(self.process_voice_command)
+        
+        # Kết nối tín hiệu UI
+        self.loop_step_required.connect(self.start_listening_loop_step)
+        self.loop_stopped_ui_update_required.connect(self.safe_reset_status_label)
+
+        # === 3. SAU ĐÓ MỚI KẾT NỐI PHẦN CỨNG (ARDUINO) ===
+        # (Để nếu lỗi thì self.client đã có sẵn để robot nói báo lỗi)
         self.serial_port = None
-        detected_port = self.get_arduino_port() # Gọi hàm tìm cổng
+        detected_port = self.get_arduino_port()
         
         if detected_port:
             try:
-                # Kết nối vào cổng vừa tìm được
                 self.serial_port = serial.Serial(detected_port, 9600, timeout=1)
-                sleep(2) # Chờ Arduino khởi động lại sau khi kết nối
+                sleep(2)
                 print(f"Kết nối thành công Arduino trên cổng {detected_port}")
                 self.speak("Đã kết nối với hệ thống phần cứng.")
             except serial.SerialException as e:
@@ -58,69 +95,27 @@ class VendingMachine(QWidget):
                 self.speak("Lỗi kết nối phần cứng.")
         else:
             print("Không tìm thấy cổng COM nào!")
+            # Bây giờ gọi speak ở đây sẽ KHÔNG bị lỗi nữa vì self.client đã có ở bước 2
             self.speak("Cảnh báo: Không tìm thấy mạch điều khiển.")
 
-        # === THAY ĐỔI: Khởi tạo stack OpenAI & Pygame ===
-        # 1. Tải file .env
-        load_dotenv()
-        
-        # 2. Khởi tạo Client OpenAI
-        try:
-            self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-            if not os.getenv("OPENAI_API_KEY"):
-                raise ValueError("OPENAI_API_KEY không tìm thấy trong file .env")
-        except Exception as e:
-            QMessageBox.critical(self, "Lỗi API", f"Lỗi: {e}. Hãy chắc chắn bạn đã tạo file .env và đặt OPENAI_API_KEY vào đó.")
-            sys.exit()
-
-        # 3. Khởi tạo Pygame Mixer để phát âm thanh
-        try:
-            pygame.mixer.init()
-        except Exception as e:
-            QMessageBox.critical(self, "Lỗi Âm thanh", f"Lỗi khởi tạo Pygame Mixer: {e}. Bạn có đang thiếu driver âm thanh không?")
-            sys.exit()
-
-        # 4. Khởi tạo bộ nhận diện giọng nói (giữ nguyên)
-        self.recognizer = sr.Recognizer()
-        self.microphone = sr.Microphone()
-        self.is_listening = False
-        self.is_in_conversation_loop = False
-        self.text_recognized.connect(self.process_voice_command) # Kết nối tín hiệu
-        
-        # === BƯỚC SỬA ĐỔI QUAN TRỌNG ===
-        
-        # 1. Tải sản phẩm LÊN TRƯỚC
+        # === 4. TẢI DỮ LIỆU SẢN PHẨM & MENU ===
         self.products_file = 'products.json'
         self.load_products() 
         
-        # 2. Tạo chuỗi menu cho AI
         menu_string = self.generate_menu_string()
 
-        # 3. "Nhồi" menu vào system prompt
         self.conversation_history = [{
             "role": "system",
             "content": (
-                "Bạn là một robot phục vụ nhà hàng thông minh và thân thiện. "
+                "Bạn là một robot phục vụ Cà Phê thông minh và thân thiện. "
                 "Nhiệm vụ chính của bạn là nhận order và trả lời câu hỏi VỀ THỰC ĐƠN SAU ĐÂY. "
                 "KHÔNG được bịa ra món ăn không có trong thực đơn. "
                 f"--- THỰC ĐƠN HÔM NAY ---\n{menu_string}\n--- HẾT THỰC ĐƠN ---\n"
-                "Nếu khách hỏi món không có trong thực đơn, hãy lịch sự từ chối và gợi ý các món có trong thực đơn. "
-                "Nếu khách HỎI (ví dụ: 'cà phê giá bao nhiêu?', 'bạn có bán gì?', 'có trà sữa không?'), hãy trả lời dựa trên thực đơn. "
                 "Luôn trả lời bằng tiếng Việt."
             )
         }]
-        # === KẾT THÚC SỬA ĐỔI ===
         
-        # Khởi tạo sản phẩm từ file JSON (phần này đã được dời lên trên)
-        self.selected_product = None
-        self.quantity = 1
-        self.sugar_amount = 10
-        self.order_id = str(int(time()))
-        
-        # Kết nối tín hiệu (giữ nguyên)
-        self.loop_step_required.connect(self.start_listening_loop_step)
-        self.loop_stopped_ui_update_required.connect(self.safe_reset_status_label)
-        
+        # Khởi tạo giao diện
         self.init_product_screen()
 
     def get_arduino_port(self):
@@ -235,7 +230,7 @@ class VendingMachine(QWidget):
     # === THÊM MỚI: Hàm chào mừng theo yêu cầu ===
     def initial_greeting(self):
         """Robot tự giới thiệu khi khởi động"""
-        intro_text = "Chào bạn! Tôi là robot phục vụ. Tôi có thể giúp bạn đặt nước, vận chuyển và phục vụ tại bàn. Bạn muốn dùng gì?"
+        intro_text = "Chào bạn! Tôi là robot Cà Phê. Tôi có thể giúp bạn pha đồ uống. Bạn muốn dùng gì?"
         self.speak(intro_text)
         # Thêm vào lịch sử chat để robot biết đã chào
         self.conversation_history.append({"role": "assistant", "content": intro_text})
@@ -357,6 +352,12 @@ class VendingMachine(QWidget):
                 break
         
         if found_product:
+
+            # === THÊM ĐOẠN NÀY ĐỂ CHẶN GIỌNG NÓI ===
+            if found_product['id'] not in [1, 7]:
+                self.speak(f"Xin lỗi, hiện tại tôi chưa phục vụ món {found_product['name']}.")
+                return
+            # =============================
             if found_product['quantity'] > 0:
                 # Thêm vào lịch sử để AI biết
                 self.conversation_history.append({"role": "user", "content": text})
@@ -410,6 +411,7 @@ class VendingMachine(QWidget):
         default_products = [
             # --- 4 MÓN CÓ SẴN CỦA BẠN ---
             {'id': 1, 'name': 'Cà phê', 'price': 18000, 'image': 'coffee.png', 'quantity': 1000, 'type': 'milk'},
+            {'id': 7, 'name': 'Cà Phê Đen', 'price': 15000, 'image': 'black_coffee.png', 'quantity': 1000, 'type': 'sugar'},
             {'id': 2, 'name': 'Nước Cam Ép', 'price': 25000, 'image': 'orange_juice.png', 'quantity': 100, 'type': 'sugar'},
             {'id': 3, 'name': 'Sinh Tố Bơ', 'price': 30000, 'image': 'avocado_smoothie.png', 'quantity': 100, 'type': 'milk'},
             {'id': 4, 'name': 'Nước Ion Kiềm', 'price': 3000, 'image': 'ion.png', 'quantity': 1000, 'type': 'sugar'},
@@ -417,7 +419,6 @@ class VendingMachine(QWidget):
             # --- 15 MÓN MỚI ĐƯỢC THÊM TỪ ẢNH ---
             {'id': 5, 'name': 'Nước Ép Táo', 'price': 25000, 'image': 'apple_juice.png', 'quantity': 100, 'type': 'sugar'},
             {'id': 6, 'name': 'Nước Ép Bơ', 'price': 30000, 'image': 'avocado_juice.png', 'quantity': 100, 'type': 'sugar'},
-            {'id': 7, 'name': 'Cà Phê Đen', 'price': 15000, 'image': 'black_coffee.png', 'quantity': 1000, 'type': 'sugar'},
             {'id': 8, 'name': 'Cappuccino', 'price': 35000, 'image': 'cappuccino.png', 'quantity': 100, 'type': 'milk'},
             {'id': 9, 'name': 'Nước Ép Cà Rốt', 'price': 25000, 'image': 'carrot_juice.png', 'quantity': 100, 'type': 'sugar'},
             {'id': 10, 'name': 'Nước Dừa', 'price': 20000, 'image': 'coconut_water.png', 'quantity': 100, 'type': 'sugar'},
@@ -564,48 +565,111 @@ class VendingMachine(QWidget):
         # === THÊM MỚI: Robot tự nói lời chào khi vào màn hình ===
         QTimer.singleShot(1000, self.initial_greeting) # Chờ 1s để app ổn định
 
+    # def refresh_grid(self):
+    #     # (Giữ nguyên)
+    #     self.clear_layout(self.grid_layout)
+    #     col_count = 2 
+    #     row, col = 0, 0
+
+    #     valid_products = [p for p in self.products if p['quantity'] > 0]
+    #     print(f"Số sản phẩm hợp lệ: {len(valid_products)}")
+
+    #     for product in valid_products:
+    #         prod_btn = QPushButton()
+    #         prod_btn.setFixedSize(650, 700)
+    #         prod_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+    #         prod_btn.setStyleSheet('background-color: white; border: 2px solid #E0E0E0; border-radius: 15px;')
+
+    #         layout = QVBoxLayout()
+    #         img_label = QLabel()
+    #         image_path = f'images/{product["image"]}'
+    #         pixmap = QPixmap(image_path).scaled(400, 400, Qt.KeepAspectRatio)
+    #         if pixmap.isNull() or not os.path.exists(image_path):
+    #             img_label.setText(f'[Ảnh {product["image"]} không tồn tại]')
+    #             img_label.setStyleSheet('font-size: 24px; color: red;')
+    #         else:
+    #             img_label.setPixmap(pixmap)
+    #         img_label.setAlignment(Qt.AlignCenter)
+    #         layout.addWidget(img_label)
+
+    #         text_label = QLabel(f"{product['name']}\n{product['price']:,} VND".replace(',', '.'))
+    #         text_label.setStyleSheet('font-size: 48px; color: #FF6200;')
+    #         text_label.setAlignment(Qt.AlignCenter)
+    #         layout.addWidget(text_label)
+
+    #         prod_btn.setLayout(layout)
+    #         prod_btn.clicked.connect(lambda _, p=product: self.on_product_clicked(p))
+            
+    #         self.grid_layout.addWidget(prod_btn, row, col)
+
+    #         col += 1
+    #         if col >= col_count:
+    #             col = 0
+    #             row += 1
+
     def refresh_grid(self):
-        # (Giữ nguyên)
+        # Xóa layout cũ để vẽ lại
         self.clear_layout(self.grid_layout)
-        col_count = 2 
+        col_count = 2 # Số cột hiển thị (2 cột mỗi hàng)
         row, col = 0, 0
 
+        # Lọc ra các sản phẩm còn hàng
         valid_products = [p for p in self.products if p['quantity'] > 0]
         print(f"Số sản phẩm hợp lệ: {len(valid_products)}")
 
         for product in valid_products:
             prod_btn = QPushButton()
-            prod_btn.setFixedSize(650, 700)
+            prod_btn.setFixedSize(650, 700) # Kích thước nút bấm
             prod_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-            prod_btn.setStyleSheet('background-color: white; border: 2px solid #E0E0E0; border-radius: 15px;')
 
             layout = QVBoxLayout()
+            
+            # --- XỬ LÝ ẢNH ---
             img_label = QLabel()
             image_path = f'images/{product["image"]}'
             pixmap = QPixmap(image_path).scaled(400, 400, Qt.KeepAspectRatio)
+            
             if pixmap.isNull() or not os.path.exists(image_path):
                 img_label.setText(f'[Ảnh {product["image"]} không tồn tại]')
                 img_label.setStyleSheet('font-size: 24px; color: red;')
             else:
                 img_label.setPixmap(pixmap)
+            
             img_label.setAlignment(Qt.AlignCenter)
             layout.addWidget(img_label)
+            # -----------------
 
+            # --- HIỂN THỊ TÊN VÀ GIÁ ---
             text_label = QLabel(f"{product['name']}\n{product['price']:,} VND".replace(',', '.'))
-            text_label.setStyleSheet('font-size: 48px; color: #FF6200;')
+            # Ép cứng màu sắc để kể cả khi nút bị disable (mờ), chữ vẫn rõ màu cam
+            text_label.setStyleSheet('font-size: 48px; color: #FF6200; font-weight: bold;')
             text_label.setAlignment(Qt.AlignCenter)
             layout.addWidget(text_label)
 
             prod_btn.setLayout(layout)
-            prod_btn.clicked.connect(lambda _, p=product: self.on_product_clicked(p))
             
+            # === LOGIC QUAN TRỌNG: CHỈ CHO PHÉP MUA ID 1 VÀ ID 7 ===
+            if product['id'] in [1, 7]:
+                # -> TRƯỜNG HỢP ĐƯỢC MUA (Active)
+                prod_btn.setStyleSheet('background-color: white; border: 2px solid #E0E0E0; border-radius: 15px;')
+                prod_btn.setCursor(Qt.PointingHandCursor) # Đổi con trỏ thành bàn tay
+                prod_btn.clicked.connect(lambda _, p=product: self.on_product_clicked(p))
+            else:
+                # -> TRƯỜNG HỢP CHỈ HIỂN THỊ (Inactive)
+                # Đặt nền hơi xám để người dùng biết là không chọn được
+                prod_btn.setStyleSheet('background-color: #F2F2F2; border: 1px solid #CCCCCC; border-radius: 15px;')
+                prod_btn.setEnabled(False) # Khóa nút này lại, không cho click
+            # =======================================================
+
+            # Thêm vào lưới (Grid Layout)
             self.grid_layout.addWidget(prod_btn, row, col)
 
+            # Thuật toán chia cột/hàng
             col += 1
             if col >= col_count:
                 col = 0
                 row += 1
-                
+
     def on_product_clicked(self, product):
         # (Giữ nguyên)
         self.selected_product = product
