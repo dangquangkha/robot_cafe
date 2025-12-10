@@ -1,9 +1,9 @@
 [
     {
         "id": 1,
-        "name": "Cà phê",
+        "name": "Cà phê nâu",
         "price": 18000,
-        "image": "coffee.png",
+        "image": "cafe_brown.jpg",
         "quantity": 1000,
         "type": "milk"
     },
@@ -11,7 +11,7 @@
         "id": 7,
         "name": "Cà Phê Đen",
         "price": 15000,
-        "image": "black_coffee.png",
+        "image": "ca-phe-den-scaled.jpg",
         "quantity": 1000,
         "type": "sugar"
     },

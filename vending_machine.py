@@ -410,8 +410,8 @@ class VendingMachine(QWidget):
         # Dữ liệu giả định nhà hàng theo yêu cầu
         default_products = [
             # --- 4 MÓN CÓ SẴN CỦA BẠN ---
-            {'id': 1, 'name': 'Cà phê', 'price': 18000, 'image': 'coffee.png', 'quantity': 1000, 'type': 'milk'},
-            {'id': 7, 'name': 'Cà Phê Đen', 'price': 15000, 'image': 'black_coffee.png', 'quantity': 1000, 'type': 'sugar'},
+            {'id': 1, 'name': 'Cà phê nâu', 'price': 18000, 'image': 'cafe_brown.jpg', 'quantity': 1000, 'type': 'milk'},
+            {'id': 7, 'name': 'Cà Phê Đen', 'price': 15000, 'image': 'ca-phe-den-scaled.jpg', 'quantity': 1000, 'type': 'sugar'},
             {'id': 2, 'name': 'Nước Cam Ép', 'price': 25000, 'image': 'orange_juice.png', 'quantity': 100, 'type': 'sugar'},
             {'id': 3, 'name': 'Sinh Tố Bơ', 'price': 30000, 'image': 'avocado_smoothie.png', 'quantity': 100, 'type': 'milk'},
             {'id': 4, 'name': 'Nước Ion Kiềm', 'price': 3000, 'image': 'ion.png', 'quantity': 1000, 'type': 'sugar'},
