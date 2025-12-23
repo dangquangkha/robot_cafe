@@ -8,7 +8,7 @@ import smtplib
 from email.mime.text import MIMEText
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
-    QGridLayout, QSlider, QMessageBox, QSizePolicy, QSpacerItem, QScrollArea
+    QGridLayout, QSlider, QMessageBox, QSizePolicy, QSpacerItem, QScrollArea,QScroller,QScrollerProperties
 )
 from PyQt5.QtCore import Qt, QTimer, QEvent, QPoint, pyqtSignal, QObject # === THAY ĐỔI ===
 from PyQt5.QtGui import QPixmap,QImage
@@ -49,7 +49,7 @@ class VendingMachine(QWidget):
         self.quantity = 1
         self.sugar_amount = 10
         self.order_id = str(int(time()))
-
+        
         # === 2. KHỞI TẠO OPENAI & PYGAME TRƯỚC (ĐƯA LÊN ĐẦU) ===
         # Tải file .env
         load_dotenv()
@@ -485,21 +485,21 @@ class VendingMachine(QWidget):
                     self.clear_layout(sub_layout)
                     sub_layout.deleteLater()
 
-    def event(self, event):
-        # (Giữ nguyên)
-        if event.type() == QEvent.TouchBegin or event.type() == QEvent.TouchUpdate or event.type() == QEvent.TouchEnd:
-            touch_points = event.touchPoints()
-            if touch_points:
-                touch_point = touch_points[0]
-                if event.type() == QEvent.TouchBegin:
-                    self.last_pos = touch_point.pos()
-                elif event.type() == QEvent.TouchUpdate:
-                    delta = touch_point.pos() - self.last_pos
-                    if hasattr(self, 'scroll_area'):
-                         self.scroll_area.verticalScrollBar().setValue(self.scroll_area.verticalScrollBar().value() - delta.y())
-                         self.last_pos = touch_point.pos()
-            return True
-        return super().event(event)
+    # def event(self, event):
+    #     # (Giữ nguyên)
+    #     if event.type() == QEvent.TouchBegin or event.type() == QEvent.TouchUpdate or event.type() == QEvent.TouchEnd:
+    #         touch_points = event.touchPoints()
+    #         if touch_points:
+    #             touch_point = touch_points[0]
+    #             if event.type() == QEvent.TouchBegin:
+    #                 self.last_pos = touch_point.pos()
+    #             elif event.type() == QEvent.TouchUpdate:
+    #                 delta = touch_point.pos() - self.last_pos
+    #                 if hasattr(self, 'scroll_area'):
+    #                      self.scroll_area.verticalScrollBar().setValue(self.scroll_area.verticalScrollBar().value() - delta.y())
+    #                      self.last_pos = touch_point.pos()
+    #         return True
+    #     return super().event(event)
 
     # === THAY ĐỔI: Sửa màn hình chính cho giống Robot nhà hàng ===
     def init_product_screen(self):
@@ -509,61 +509,81 @@ class VendingMachine(QWidget):
             self.main_layout = QVBoxLayout()
         self.setLayout(self.main_layout)
 
-        # Header
+        # 1. Header
         header_layout = QHBoxLayout()
-        title_label = QLabel('CHÀO MỪNG, TÔI LÀ ROBOT PHỤC VỤ') # <-- Sửa tiêu đề
+        title_label = QLabel('CHÀO MỪNG, TÔI LÀ ROBOT PHỤC VỤ')
         title_label.setStyleSheet('font-size: 30px; font-weight: bold; color: #FF6200;')
         title_label.setAlignment(Qt.AlignCenter)
         header_layout.addWidget(title_label)
-        
         self.main_layout.addLayout(header_layout)
 
-        # Grid sản phẩm (giữ nguyên QScrollArea)
+        # 2. Vùng cuộn sản phẩm (QScrollArea)
         self.scroll_area = QScrollArea() 
         self.scroll_area.setWidgetResizable(True)
-        # (CSS cho scrollbar giữ nguyên)
+        # CSS giúp thanh cuộn to, dễ chạm bằng tay
         self.scroll_area.setStyleSheet("""
-            QScrollBar:vertical { ... } 
+            QScrollArea { border: none; background-color: transparent; }
+            QScrollBar:vertical {
+                border: none; background: #f0f0f0; width: 25px; margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #FF6200; min-height: 30px; border-radius: 12px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
         """)
-        self.scroll_area.viewport().setAttribute(Qt.WA_AcceptTouchEvents)
+        
+        # --- CẤU HÌNH VUỐT CẢM ỨNG (TOUCH SCROLL) ---
+        # SỬA THÀNH: Truy cập thông qua ScrollBar
+        self.scroll_area.verticalScrollBar().setSingleStep(10) # Tăng độ mượt
+        self.scroll_area.horizontalScrollBar().setSingleStep(10)
+        target_view = self.scroll_area.viewport()
+        target_view.setAttribute(Qt.WA_AcceptTouchEvents) # Chấp nhận sự kiện cảm ứng
+        
+        # Kích hoạt QScroller để vuốt như điện thoại
+        self.scroller = QScroller.scroller(target_view)
+        self.scroller.grabGesture(target_view, QScroller.LeftMouseButtonGesture)
+        
+        # Tinh chỉnh độ nhạy
+        props = self.scroller.scrollerProperties()
+        props.setScrollMetric(QScrollerProperties.DragStartDistance, 0.001)
+        props.setScrollMetric(QScrollerProperties.DragVelocitySmoothingFactor, 0.6)
+        props.setScrollMetric(QScrollerProperties.FrameRate, QScrollerProperties.Fps60)
+        self.scroller.setScrollerProperties(props)
+        # --------------------------------------------
 
+        # 3. Grid chứa sản phẩm
         scroll_widget = QWidget()
         self.grid_layout = QGridLayout(scroll_widget)
         self.grid_layout.setSpacing(20)
         self.grid_layout.setContentsMargins(10, 10, 10, 10)
 
-        self.refresh_grid() # Tải menu nhà hàng
+        self.refresh_grid() # Nạp danh sách món ăn
 
         self.scroll_area.setWidget(scroll_widget)
         self.main_layout.addWidget(self.scroll_area)
 
-        # === THÊM MỚI: Footer chứa nút Voice và Status ===
+        # 4. Footer (Nút nói và trạng thái)
         self.footer_layout = QHBoxLayout()
-        
-        # Nút nghe lệnh
         self.listen_btn = QPushButton("Nhấn để nói")
         self.listen_btn.setStyleSheet('background-color: #FF6200; color: white; font-size: 20px; border-radius: 15px; padding: 10px; height: 60px; min-width: 200px;')
-        self.listen_btn.clicked.connect(self.toggle_conversation_loop) # <-- Đổi tên hàm
-        self.footer_layout.addWidget(self.listen_btn) # <-- Sửa tên biến
-
-        # Label trạng thái
+        self.listen_btn.clicked.connect(self.toggle_conversation_loop)
+        
         self.status_label = QLabel("Nhấn để nói")
         self.status_label.setStyleSheet('font-size: 20px; color: #002266; margin-left: 15px;')
+        
+        self.footer_layout.addWidget(self.listen_btn)
         self.footer_layout.addWidget(self.status_label)
-        self.footer_layout.addStretch() # Đẩy về bên trái
+        self.footer_layout.addStretch()
 
         self.main_layout.addLayout(self.footer_layout)
-        # ===============================================
 
+        # 5. Giao diện tổng thể
         self.setStyleSheet("""
-            QWidget {
-                background: qradialgradient(cx:0.5, cy:0.5, radius:1, fx:0.5, fy:0.5, stop:0 #00CCFF, stop:1 #FFFFFF);
-            }
+            QWidget { background: qradialgradient(cx:0.5, cy:0.5, radius:1, fx:0.5, fy:0.5, stop:0 #00CCFF, stop:1 #FFFFFF); }
         """)
-        self.update()
-
-        # === THÊM MỚI: Robot tự nói lời chào khi vào màn hình ===
-        QTimer.singleShot(1000, self.initial_greeting) # Chờ 1s để app ổn định
+        
+        # Lời chào của Robot
+        QTimer.singleShot(1000, self.initial_greeting)
 
     # def refresh_grid(self):
     #     # (Giữ nguyên)
@@ -621,7 +641,8 @@ class VendingMachine(QWidget):
             prod_btn = QPushButton()
             prod_btn.setFixedSize(650, 700) # Kích thước nút bấm
             prod_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-
+            # Bên trong vòng lặp for product in valid_products:
+            prod_btn.setAttribute(Qt.WA_AcceptTouchEvents)
             layout = QVBoxLayout()
             
             # --- XỬ LÝ ẢNH ---
