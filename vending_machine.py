@@ -829,7 +829,7 @@ class VendingMachine(QWidget):
         self.brewing_label.setStyleSheet('font-size: 20px; color: #002266;')
         self.main_layout.addWidget(self.brewing_label, alignment=Qt.AlignCenter)
 
-        # Thiết lập các bước hiển thị cho người dùng đỡ chán (Giữ nguyên)
+        # Thiết lập các bước hiển thị (Giữ nguyên)
         self.brewing_steps = [
             'Máy đang chạy...',
             'Vui lòng đợi giây lát...',
@@ -838,19 +838,29 @@ class VendingMachine(QWidget):
         self.brewing_step = 0
         self.brewing_timer = QTimer()
         self.brewing_timer.timeout.connect(self.update_brewing)
-        self.brewing_timer.start(2000) # Chạy thanh trạng thái chậm lại chút cho khớp với máy bơm
+        self.brewing_timer.start(2000)
 
-        # === PHẦN SỬA ĐỔI QUAN TRỌNG TẠI ĐÂY ===
+        # === PHẦN SỬA ĐỔI: KIỂM TRA ID VÀ GỬI TÍN HIỆU ===
         if self.serial_port:
             try:
-                print("Thanh toán thành công -> Gửi lệnh kích hoạt (số 1)")
-                # Gửi duy nhất ký tự '1' xuống Arduino
-                self.serial_port.write(b'1') 
+                # Kiểm tra ID của sản phẩm đã chọn
+                current_id = self.selected_product.get('id')
+                
+                if current_id == 1:
+                    command = b'1'
+                    print(f"Sản phẩm ID {current_id}: Gửi lệnh '1' (Bật Relay 1)")
+                else:
+                    command = b'0'
+                    print(f"Sản phẩm ID {current_id}: Gửi lệnh '0' (Bật Relay 2)")
+                
+                # Gửi lệnh xuống Arduino
+                self.serial_port.write(command)
+                
             except Exception as e:
                 print(f"Lỗi khi gửi lệnh xuống Arduino: {e}")
         else:
-            print("Chưa kết nối Arduino nên không gửi lệnh được.")
-            
+            print("Chưa kết nối Arduino!")
+
         self.update()
 
     def update_brewing(self):
