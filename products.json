@@ -9,10 +9,10 @@
     },
     {
         "id": 7,
-        "name": "Cà Phê Đen",
-        "price": 15000,
-        "image": "ca-phe-den-scaled.jpg",
-        "quantity": 1000,
+        "name": "Nước Cam Ép",
+        "price": 10000,
+        "image": "orange_juice.png",
+        "quantity": 100,
         "type": "sugar"
     },
     {
